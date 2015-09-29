@@ -13,8 +13,12 @@
 static DEFINE_MUTEX(disconnect_mutex);
 
 static int mcp2210_probe(struct usb_interface *interface, const struct usb_device_id *id);
+static int mcp2210_open(struct inode *inode, struct file *file);
 static void mcp2210_disconnect(struct usb_interface *interface);
 static void mcp2210_urb_complete(struct urb *urb);
+static void mcp2210_delete(struct kref *kref);
+static int mcp2210_release(struct inode *inode, struct file *file);
+static struct mcp2210_usb *mcp2210_to_dev(struct kref *kref);
 
 struct mcp2210_usb_endpoint {
 	struct usb_host_endpoint *endpoint;
@@ -28,7 +32,9 @@ struct mcp2210_usb {
 	struct usb_interface *interface;
 	struct mcp2210_usb_endpoint in_endpoint;
 	struct mcp2210_usb_endpoint out_endpoint;
+	struct kref kref;
 	int minor;
+	struct mutex io_mutex;
 };
 
 static struct usb_device_id mcp2210_devices[] = {
@@ -46,6 +52,8 @@ static struct usb_driver mcp2210_driver = {
 
 const struct file_operations mcp2210_fops = {
 	.owner = THIS_MODULE,
+	.open = mcp2210_open,
+	.release = mcp2210_release,
 	.read = NULL,
 	.write = NULL,
 };
@@ -77,6 +85,98 @@ static void mcp2210_exit(void)
 	printk(KERN_INFO "Exit complete\n");
 }
 
+static int mcp2210_open(struct inode *inode, struct file *file)
+{
+	struct mcp2210_usb *dev;
+	struct usb_interface *interface;
+	int subminor;
+	int retval = 0;
+
+	printk(KERN_INFO "mcp2210_open: opening..\n");
+
+	subminor = iminor(inode);
+
+	interface = usb_find_interface(&mcp2210_driver, subminor);
+	if (!interface)
+	{
+		printk(KERN_ERR "Unable to locate device for minor %i\n", subminor);
+		retval = -ENODEV;
+		goto exit;
+	}
+
+	printk(KERN_INFO "mcp2210_open: Got interface\n");
+
+	dev = usb_get_intfdata(interface);
+	if (!dev)
+	{
+		printk(KERN_ERR "Unable to locate device\n");
+		retval = -ENODEV;
+		goto exit;
+	}
+
+	printk(KERN_INFO "mcp2210_open: Got dev\n");
+
+	/*retval = usb_autopm_get_interface(interface);
+	printk(KERN_INFO "mcp2210_open: retval after usb_autopm_get_interface: %i\n", retval);
+	if (retval)
+	{
+		goto exit;
+	}*/
+
+	kref_get(&dev->kref);
+
+	printk(KERN_INFO "mcp2210_open: inc kref and usb_autopm\n");
+
+	file->private_data = dev;
+
+exit:
+
+	printk(KERN_INFO "mcp2210_open: exiting with value: %i\n", retval);
+
+	return retval;
+}
+
+static int mcp2210_release(struct inode *inode, struct file *file)
+{
+	struct mcp2210_usb *dev;
+
+	printk(KERN_INFO "mcp2210_release: releasing..\n");
+
+	dev = file->private_data;
+	if (dev == NULL)
+	{
+		return -ENODEV;
+	}
+
+	printk(KERN_INFO "mcp2210_release: dev found..\n");
+
+/*
+	mutex_lock(&dev->io_mutex);
+	if (dev->interface)
+	{
+		usb_autopm_put_interface(dev->interface);
+	}
+	mutex_unlock(&dev->io_mutex);
+*/
+
+	kref_put(&dev->kref, mcp2210_delete);
+
+	printk(KERN_INFO "mcp2210_release: exiting\n");
+
+	return 0;
+}
+
+static void mcp2210_delete(struct kref *kref)
+{
+	struct mcp2210_usb *dev = mcp2210_to_dev(kref);
+	kfree(dev);
+}
+
+static struct mcp2210_usb *mcp2210_to_dev(struct kref *kref)
+{
+	return container_of(kref, struct mcp2210_usb, kref);
+}
+
 static int mcp2210_probe(struct usb_interface *interface, const struct usb_device_id *id)
 {
 	int retval = -ENODEV;
@@ -86,7 +186,7 @@ static int mcp2210_probe(struct usb_interface *interface, const struct usb_devic
 
 	//struct usb_host_endpoint *last_endpoint, *endpoint;
 
-	printk(KERN_INFO "MCP2210 plugged in: %04X:%04X\n", id->idVendor, id->idProduct);
+	printk(KERN_INFO "mcp2210_probe: MCP2210 plugged in: %04X:%04X\n", id->idVendor, id->idProduct);
 	udev = interface_to_usbdev(interface);
 
 	if (!udev)
@@ -107,6 +207,8 @@ static int mcp2210_probe(struct usb_interface *interface, const struct usb_devic
 
 	dev->interface = interface;
 	dev->dev = udev;
+
+	kref_init(&dev->kref);
 
 	// Setting up endpoints and urbs
 	/*
@@ -147,7 +249,6 @@ static int mcp2210_probe(struct usb_interface *interface, const struct usb_devic
 	
 	retval = usb_register_dev(interface, &mcp2210_class);
 
-	printk(KERN_INFO "Completing registration\n");
 	if (retval)
 	{
 		printk(KERN_ERR "Unable to register usb device\n");
@@ -155,6 +256,8 @@ static int mcp2210_probe(struct usb_interface *interface, const struct usb_devic
 	}
 
 	dev->minor = interface->minor;
+
+	printk(KERN_INFO "mcp2210_probe: probe complete\n");
 
 	return 0;
 
