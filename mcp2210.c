@@ -37,19 +37,16 @@ struct mcp2210_usb_endpoint {
 };
 
 struct mcp2210_usb {
-	struct usb_device *dev;						// 
-	struct usb_interface *interface;			//
+	struct usb_device *dev;						// Pointer to device
+	struct usb_interface *interface;			// Pointer to interface
 	struct mcp2210_usb_endpoint in_endpoint;	// Endpoint struct to receive usb data
 	struct mcp2210_usb_endpoint out_endpoint;	// Endpoint struct to send usb data
 	bool int_on;								// Is the device still running? need it to determine whether or not to resubmit IN urb
-	bool readable;								// Input data currently readable
-	bool in_int_working;						//
-	bool out_int_working;						//
+	bool readable;								// Input data currently readable; CURRENTLY UNUSED
 	struct kref kref;							// Reference counter
 	int minor;									// Minor number of device
-	struct mutex io_mutex;						// Mutex lock
+	struct mutex io_mutex;						// Mutex lock; CURRENTLY UNUSED
 	spinlock_t io_spinlock;						// Spinlock for I/O
-	char *test_buffer;							// TEMPORARY FOR TESTING;REMOVE LATER
 };
 
 /*
@@ -207,8 +204,6 @@ static void mcp2210_delete(struct kref *kref)
 	usb_free_urb(dev->in_endpoint.urb);
 	usb_free_urb(dev->out_endpoint.urb);
 
-
-	kfree(dev->test_buffer);
 	printk(KERN_INFO "mcp2210_delete: freed dev->test_buffer\n");
 
 	kfree(dev);
@@ -300,16 +295,8 @@ static ssize_t mcp2210_write(struct file *filp, const char __user *buf, size_t c
 		goto unlock_exit;
 	}
 
-/*
-	printk(KERN_INFO "mcp2210_write: user input:\n");
-	unsigned int i = 0;
-	for (i; i < BUFFER_SIZE; ++i)
-	{
-		printk(KERN_INFO "0x%02hhx\n", dev->out_endpoint.buffer[i]);
-	}
-*/
-
 	// Attempt to send command to our device here...
+	// If successful, we won't unlock until we reach the urb callback function
 	retval = usb_submit_urb(dev->out_endpoint.urb, GFP_KERNEL);
 	if (retval)
 	{
@@ -321,6 +308,7 @@ static ssize_t mcp2210_write(struct file *filp, const char __user *buf, size_t c
 
 unlock_exit:
 	spin_unlock(&dev->io_spinlock);
+
 exit:
 	return retval;
 }
@@ -396,13 +384,10 @@ static int mcp2210_probe(struct usb_interface *interface, const struct usb_devic
 	}
 	dev->int_on = true;
 	dev->readable = false;
-	dev->in_int_working = false;
-	dev->out_int_working = false;
 	kref_init(&dev->kref);
 	dev->minor = interface->minor;
 	mutex_init(&dev->io_mutex);
 	spin_lock_init(&dev->io_spinlock);
-	dev->test_buffer = kzalloc(BUFFER_SIZE, GFP_KERNEL);
 
 	usb_set_intfdata(interface, dev);
 	
@@ -420,7 +405,6 @@ static int mcp2210_probe(struct usb_interface *interface, const struct usb_devic
 	return 0;
 
 error:
-	kfree(dev->test_buffer);
 	kfree(dev);
 
 exit:
@@ -449,15 +433,6 @@ static void mcp2210_in_urb_complete(struct urb *urb)
 
 	dev->readable = true;
 	
-	unsigned int i;
-	for (i = 0; i < 32; ++i)
-	{
-		printk(KERN_INFO "mcp2210_in_urb_complete: %i: 0x%02hhX\n", i, dev->in_endpoint.buffer[i]);
-	}
-	
-	//printk(KERN_INFO "mcp2210_in_urb_complete: 0x%02X\n", dev->in_endpoint.buffer);
-	printk(KERN_INFO "mcp2210_in_urb_complete: urb->actual_length: %d\n", urb->actual_length);
-
 	// Resubmitting
 	if (dev->int_on)
 	{
@@ -492,15 +467,6 @@ static void mcp2210_out_urb_complete(struct urb *urb)
 	}
 
 	dev->readable = true;
-
-	/*
-	for (i; i < BUFFER_SIZE; ++i)
-	{
-		printk(KERN_INFO "mcp2210_out_urb_complete: %i: 0x%02X\n", i, dev->out_endpoint.buffer[i]);
-	}
-	printk(KERN_INFO "mcp2210_out_urb_complete: 0x%02X\n", dev->out_endpoint.buffer);
-	*/
-	printk(KERN_INFO "mcp2210_out_urb_complete: urb->actual_length: %d\n", urb->actual_length);
 }
 
 static void mcp2210_disconnect(struct usb_interface *interface)
@@ -510,13 +476,10 @@ static void mcp2210_disconnect(struct usb_interface *interface)
 	// Need to clear up allocated data
 	struct mcp2210_usb *dev = usb_get_intfdata(interface);
 	usb_set_intfdata(interface, NULL);
-	printk(KERN_INFO "mcp2210_disconnect: interface data set to NULL\n");
 
 	kref_put(&dev->kref, mcp2210_delete);
-	printk(KERN_INFO "mcp2210_disconnect: decremented dev->kref\n");
 
 	usb_deregister_dev(interface, &mcp2210_class);
-	printk(KERN_INFO "mcp2210_disconnect: deregistered usb\n");
 
 	printk(KERN_INFO "Disconnect complete\n");
 }

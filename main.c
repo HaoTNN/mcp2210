@@ -4,66 +4,621 @@
 #include <string.h>
 #include <errno.h>
 
-#define DEFAULT_DEVICE_PATH "/dev/mcp2210_usb2spi"
-#define CMD_SIZE 64
-#define MAX_ARGUMENT_CNT 6
-#define MAX_ARGUMENT_LEN 64
+#include "main.h"
+#include "cmd_helper_functions.c"
+#include "nrf24l01.h"
 
 #define QUIT_CMD "q"
 #define GET_GPIO_DIR_CMD "get_gpio_dir"
 #define SET_GPIO_DIR_CMD "set_gpio_dir"
 #define SET_GPIO_VAL_CMD "set_gpio_val"
 
-int process_cmd(int fd, const char* cmd_buffer, char *save_buffer, size_t cmd_count, size_t save_count)
+// TODO: See main.h
+
+int send_cmd(int fd, const char* cmd_buffer, char *save_buffer, size_t cmd_count, size_t save_count);
+int command_result(char return_code);
+void print_as_binary(char c);
+char process_hex(const char* src);
+
+int not_yet_implemented(int fd, char user_input[MAX_ARGUMENT_CNT][MAX_ARGUMENT_LEN], size_t user_count, char *save_buffer, size_t save_count, int index)
 {
-	int bytes_written = write(fd, cmd_buffer, cmd_count);
-	if (bytes_written < 0)
-	{	
-		fprintf(stdout, "Error writing command: %i\n", errno);
-		return errno;
-	}
-	int bytes_read = read(fd, save_buffer, save_count);
-	if (bytes_read < 0)
-	{
-		fprintf(stdout, "Error reading from device: %i\n", errno);
-		return errno;
-	}
+	fprintf(stdout, "Command not implemented\n");
 	return 0;
 }
 
-void print_as_binary(char c)
+int ram_set_gpio_chip(int fd, char user_input[MAX_ARGUMENT_CNT][MAX_ARGUMENT_LEN], size_t user_count, char *save_buffer, size_t save_count, int index)
 {
-	fprintf(stdout, "%c%c%c%c %c%c%c%c ",
-		(c & 0x80) ? '1' : '0',
-		(c & 0x40) ? '1' : '0',
-		(c & 0x20) ? '1' : '0',
-		(c & 0x10) ? '1' : '0',
-		(c & 0x08) ? '1' : '0',
-		(c & 0x04) ? '1' : '0',
-		(c & 0x02) ? '1' : '0',
-		(c & 0x01) ? '1' : '0');
+	char cmd_buffer[64] = "";
+	cmd_buffer[0] = 0x21;
+
+	unsigned int i;
+	unsigned int j;
+	// Password settings are from byte index 18 to 26. We're gonna ignore that for now
+	for (i = 4, j = index; i < 18; ++i, ++j)
+	{
+		cmd_buffer[i] = process_hex(user_input[j]);
+	}
+
+	int status = send_cmd(fd, cmd_buffer, save_buffer, sizeof(cmd_buffer), save_count);
+	if (status)
+	{
+		return status;
+	}
+	
+	return command_result(save_buffer[1]);
 }
 
-// Process a 1 byte hex input and return as a char
-// If input is not in FF format, then return '\0'
-char process_hex(const char* src)
+int ram_get_gpio_chip(int fd, char user_input[MAX_ARGUMENT_CNT][MAX_ARGUMENT_LEN], size_t user_count, char *save_buffer, size_t save_count, int index)
 {
-	if (strlen(src) != 2)
+	char cmd_buffer[64] = "";
+	cmd_buffer[0] = 0x20;
+
+	int status = send_cmd(fd, cmd_buffer, save_buffer, sizeof(cmd_buffer), save_count);
+	if (status)
 	{
-		return '\0';
+		return status;
 	}
-	unsigned int i;
-	char retval = 0;
-	for (i = 0; i < 2; ++i)
+
+	if(!command_result(save_buffer[1]))
 	{
-		char intermediate = 0 + src[i] - '0';
-		if (src[i] >= 'A' && src[i] <= 'F')
+		fprintf(stdout, "Values:\n");
+		unsigned int i;
+		for (i = 4; i < 19; ++i)
 		{
-			intermediate -= 7;
+			fprintf(stdout, "%i: ", i);
+			print_as_binary(save_buffer[i]);
+			fprintf(stdout, "\n");
 		}
-		retval |= intermediate << 4 * (1 - i);
+		return 0;
 	}
-	return retval;
+	else
+	{
+		return -1;
+	}
+}
+
+int ram_set_gpio_dir(int fd, char user_input[MAX_ARGUMENT_CNT][MAX_ARGUMENT_LEN], size_t user_count, char *save_buffer, size_t save_count, int index)
+{
+	char cmd_buffer[64] = "";
+	cmd_buffer[0] = 0x32;
+
+	unsigned int i;
+	unsigned int j;
+	for (i = 4, j = index; i < 6; ++i, ++j)
+	{
+		cmd_buffer[i] = process_hex(user_input[j]);
+	}
+
+	int status = send_cmd(fd, cmd_buffer, save_buffer, sizeof(cmd_buffer), save_count);
+	if (status)
+	{
+		return status;
+	}
+	
+	return command_result(save_buffer[1]);
+}
+
+int ram_get_gpio_dir(int fd, char user_input[MAX_ARGUMENT_CNT][MAX_ARGUMENT_LEN], size_t user_count, char *save_buffer, size_t save_count, int index)
+{
+	char cmd_buffer[64] = "";
+	cmd_buffer[0] = 0x33;
+
+	int status = send_cmd(fd, cmd_buffer, save_buffer, sizeof(cmd_buffer), save_count);
+	if (status)
+	{
+		return status;
+	}
+
+	if(!command_result(save_buffer[1]))
+	{
+		fprintf(stdout, "Values:\n");
+		unsigned int i;
+		for (i = 4; i < 6; ++i)
+		{
+			fprintf(stdout, "%i: ", i);
+			print_as_binary(save_buffer[i]);
+			fprintf(stdout, "\n");
+		}
+		return 0;
+	}
+	else
+	{
+		return -1;
+	}
+}
+
+int ram_set_gpio_val(int fd, char user_input[MAX_ARGUMENT_CNT][MAX_ARGUMENT_LEN], size_t user_count, char *save_buffer, size_t save_count, int index)
+{
+	char cmd_buffer[64] = "";
+	cmd_buffer[0] = 0x30;
+
+	unsigned int i;
+	unsigned int j;
+	for (i = 4, j = index; i < 6; ++i, ++j)
+	{
+		cmd_buffer[i] = process_hex(user_input[j]);
+	}
+
+	int status = send_cmd(fd, cmd_buffer, save_buffer, sizeof(cmd_buffer), save_count);
+	if (status)
+	{
+		return status;
+	}
+	
+	if(!command_result(save_buffer[1]))
+	{
+		fprintf(stdout, "Values:\n");
+		unsigned int i;
+		for (i = 4; i < 6; ++i)
+		{
+			fprintf(stdout, "%i: ", i);
+			print_as_binary(save_buffer[i]);
+			fprintf(stdout, "\n");
+		}
+		return 0;
+	}
+	else
+	{
+		return -1;
+	}
+}
+
+int ram_get_gpio_val(int fd, char user_input[MAX_ARGUMENT_CNT][MAX_ARGUMENT_LEN], size_t user_count, char *save_buffer, size_t save_count, int index)
+{
+	char cmd_buffer[64] = "";
+	cmd_buffer[0] = 0x31;
+
+	int status = send_cmd(fd, cmd_buffer, save_buffer, sizeof(cmd_buffer), save_count);
+	if (status)
+	{
+		return status;
+	}
+	
+	if(!command_result(save_buffer[1]))
+	{
+		fprintf(stdout, "Values:\n");
+		unsigned int i;
+		for (i = 4; i < 6; ++i)
+		{
+			fprintf(stdout, "%i: ", i);
+			print_as_binary(save_buffer[i]);
+			fprintf(stdout, "\n");
+		}
+		return 0;
+	}
+	else
+	{
+		return -1;
+	}
+}
+
+int ram_set_spi(int fd, char user_input[MAX_ARGUMENT_CNT][MAX_ARGUMENT_LEN], size_t user_count, char *save_buffer, size_t save_count, int index)
+{
+	char cmd_buffer[64] = "";
+	cmd_buffer[0] = 0x40;
+
+	unsigned int i;
+	unsigned int j;
+	for (i = 4, j = index; i < 21; ++i, ++j)
+	{
+		cmd_buffer[i] = process_hex(user_input[j]);
+	}
+
+	int status = send_cmd(fd, cmd_buffer, save_buffer, sizeof(cmd_buffer), save_count);
+	if (status)
+	{
+		return status;
+	}
+
+	if (!command_result(save_buffer[1]))
+	{
+		fprintf(stdout, "Values:\n");
+		unsigned int i;
+		for (i = 4; i < 21; ++i)
+		{
+			fprintf(stdout, "%i: ", i);
+			print_as_binary(save_buffer[i]);
+			fprintf(stdout, "\n");
+		}
+		return 0;
+	}
+	else
+	{
+		return -1;		
+	}
+}
+
+int ram_get_spi(int fd, char user_input[MAX_ARGUMENT_CNT][MAX_ARGUMENT_LEN], size_t user_count, char *save_buffer, size_t save_count, int index)
+{
+	char cmd_buffer[64] = "";
+	cmd_buffer[0] = 0x41;
+
+	int status = send_cmd(fd, cmd_buffer, save_buffer, sizeof(cmd_buffer), save_count);
+	if (status)
+	{
+		return status;
+	}
+
+	if (!command_result(save_buffer[1]))
+	{
+		fprintf(stdout, "Values:\n");
+		unsigned int i;
+		for (i = 4; i < 21; ++i)
+		{
+			fprintf(stdout, "%i: ", i);
+			print_as_binary(save_buffer[i]);
+			fprintf(stdout, "\n");
+		}
+		return 0;
+	}
+	else
+	{
+		return -1;
+	}
+}
+
+int nvram_set_power_up_defaults(int fd, char user_input[MAX_ARGUMENT_CNT][MAX_ARGUMENT_LEN], size_t user_count, char *save_buffer, size_t save_count, int index)
+{
+	char cmd_buffer[64] = "";
+	cmd_buffer[0] = 0x60;
+	cmd_buffer[1] = 0x20;
+
+	unsigned int i;
+	unsigned int j;
+	// Password settings are from byte index 18 to 26. We're gonna ignore that for now
+	for (i = 4, j = index; i < 18; ++i, ++j)
+	{
+		cmd_buffer[i] = process_hex(user_input[j]);
+	}
+
+	int status = send_cmd(fd, cmd_buffer, save_buffer, sizeof(cmd_buffer), save_count);
+	if (status)
+	{
+		return status;
+	}
+	
+	return command_result(save_buffer[1]);
+}
+
+int nvram_set_spi_power_up_settings(int fd, char user_input[MAX_ARGUMENT_CNT][MAX_ARGUMENT_LEN], size_t user_count, char *save_buffer, size_t save_count, int index)
+{
+	char cmd_buffer[64] = "";
+	cmd_buffer[0] = 0x60;
+	cmd_buffer[1] = 0x10;
+	unsigned int i;
+	unsigned int j;
+	for (i = 4, j = index; i < 21; ++i, ++j)
+	{
+		cmd_buffer[i] = process_hex(user_input[j]);
+	}
+
+	int status = send_cmd(fd, cmd_buffer, save_buffer, sizeof(cmd_buffer), save_count);
+	if (status)
+	{
+		return status;
+	}
+
+	return command_result(save_buffer[1]);
+}
+
+int nvram_set_usb_power_up_params(int fd, char user_input[MAX_ARGUMENT_CNT][MAX_ARGUMENT_LEN], size_t user_count, char *save_buffer, size_t save_count, int index)
+{
+	char cmd_buffer[64] = "";
+	cmd_buffer[0] = 0x60;
+	cmd_buffer[1] = 0x30;
+	unsigned int i;
+	unsigned int j;
+	for (i = 4, j = index; i < 10; ++i, ++j)
+	{
+		cmd_buffer[i] = process_hex(user_input[j]);
+	}
+
+	int status = send_cmd(fd, cmd_buffer, save_buffer, sizeof(cmd_buffer), save_count);
+	if (status)
+	{
+		return status;
+	}
+
+	return command_result(save_buffer[1]);
+}
+
+int nvram_set_usb_manufacturer_name(int fd, char user_input[MAX_ARGUMENT_CNT][MAX_ARGUMENT_LEN], size_t user_count, char *save_buffer, size_t save_count, int index)
+{
+	char cmd_buffer[64] = "";
+	cmd_buffer[0] = 0x60;
+	cmd_buffer[1] = 0x50;
+	unsigned int i;
+	unsigned int j;
+	for (i = 4, j = index; i < 64; ++i, ++j)
+	{
+		cmd_buffer[i] = process_hex(user_input[j]);
+	}
+	// Specs indicate to fill index 5 with 0x03
+	cmd_buffer[5] = 0x03;
+
+	int status = send_cmd(fd, cmd_buffer, save_buffer, sizeof(cmd_buffer), save_count);
+	if (status)
+	{
+		return status;
+	}
+
+	return command_result(save_buffer[1]);
+}
+
+int nvram_set_usb_name(int fd, char user_input[MAX_ARGUMENT_CNT][MAX_ARGUMENT_LEN], size_t user_count, char *save_buffer, size_t save_count, int index)
+{
+	char cmd_buffer[64] = "";
+	cmd_buffer[0] = 0x60;
+	cmd_buffer[1] = 0x40;
+	unsigned int i;
+	unsigned int j;
+	for (i = 4, j = index; i < 64; ++i, ++j)
+	{
+		cmd_buffer[i] = process_hex(user_input[j]);
+	}
+	// Specs indicate to fill index 5 with 0x03
+	cmd_buffer[5] = 0x03;
+
+	int status = send_cmd(fd, cmd_buffer, save_buffer, sizeof(cmd_buffer), save_count);
+	if (status)
+	{
+		return status;
+	}
+
+	return command_result(save_buffer[1]);
+}
+
+int nvram_get_spi_power_up_settings(int fd, char user_input[MAX_ARGUMENT_CNT][MAX_ARGUMENT_LEN], size_t user_count, char *save_buffer, size_t save_count, int index)
+{
+	char cmd_buffer[64] = "";
+	cmd_buffer[0] = 0x61;
+	cmd_buffer[1] = 0x10;
+
+	int status = send_cmd(fd, cmd_buffer, save_buffer, sizeof(cmd_buffer), save_count);
+	if (status)
+	{
+		return status;
+	}
+
+	if(!command_result(save_buffer[1]))
+	{
+		fprintf(stdout, "Values:\n");
+		unsigned int i;
+		for (i = 4; i < 21; ++i)
+		{
+			fprintf(stdout, "%i: ", i);
+			print_as_binary(save_buffer[i]);
+			fprintf(stdout, "\n");
+		}
+		return 0;
+	}
+	else
+	{
+		return -1;
+	}
+}
+
+int nvram_get_power_up_settings(int fd, char user_input[MAX_ARGUMENT_CNT][MAX_ARGUMENT_LEN], size_t user_count, char *save_buffer, size_t save_count, int index)
+{
+	char cmd_buffer[64] = "";
+	cmd_buffer[0] = 0x61;
+	cmd_buffer[1] = 0x20;
+
+	int status = send_cmd(fd, cmd_buffer, save_buffer, sizeof(cmd_buffer), save_count);
+	if (status)
+	{
+		return status;
+	}
+
+	if(!command_result(save_buffer[1]))
+	{
+		fprintf(stdout, "Values:\n");
+		unsigned int i;
+		for (i = 4; i < 19; ++i)
+		{
+			fprintf(stdout, "%i: ", i);
+			print_as_binary(save_buffer[i]);
+			fprintf(stdout, "\n");
+		}
+		return 0;
+	}
+	else
+	{
+		return -1;
+	}
+}
+int nvram_get_usb_power_up_params(int fd, char user_input[MAX_ARGUMENT_CNT][MAX_ARGUMENT_LEN], size_t user_count, char *save_buffer, size_t save_count, int index)
+{
+	char cmd_buffer[64] = "";
+	cmd_buffer[0] = 0x61;
+	cmd_buffer[1] = 0x30;
+
+	int status = send_cmd(fd, cmd_buffer, save_buffer, sizeof(cmd_buffer), save_count);
+	if (status)
+	{
+		return status;
+	}
+
+	if(!command_result(save_buffer[1]))
+	{
+		fprintf(stdout, "Values:\n");
+		unsigned int i;
+		for (i = 12; i < 16; ++i)
+		{
+			fprintf(stdout, "%i: ", i);
+			print_as_binary(save_buffer[i]);
+			fprintf(stdout, "\n");
+		}
+		fprintf(stdout, "29: ");
+		print_as_binary(save_buffer[29]);
+		fprintf(stdout, "\n");
+		fprintf(stdout, "30: ");
+		print_as_binary(save_buffer[30]);
+		fprintf(stdout, "\n");
+		return 0;
+	}
+	else
+	{
+		return -1;
+	}
+
+}
+
+int nvram_get_usb_manufacturer_name(int fd, char user_input[MAX_ARGUMENT_CNT][MAX_ARGUMENT_LEN], size_t user_count, char *save_buffer, size_t save_count, int index)
+{
+	char cmd_buffer[64] = "";
+	cmd_buffer[0] = 0x61;
+	cmd_buffer[1] = 0x50;
+
+	int status = send_cmd(fd, cmd_buffer, save_buffer, sizeof(cmd_buffer), save_count);
+	if (status)
+	{
+		return status;
+	}
+
+	if(!command_result(save_buffer[1]))
+	{
+		fprintf(stdout, "Values:\n");
+		unsigned int i;
+		for (i = 4; i < 64; ++i)
+		{
+			fprintf(stdout, "%i: ", i);
+			print_as_binary(save_buffer[i]);
+			fprintf(stdout, "\n");
+		}
+		return 0;
+	}
+	else
+	{
+		return -1;
+	}
+}
+
+int nvram_get_usb_name(int fd, char user_input[MAX_ARGUMENT_CNT][MAX_ARGUMENT_LEN], size_t user_count, char *save_buffer, size_t save_count, int index)
+{
+	char cmd_buffer[64] = "";
+	cmd_buffer[0] = 0x61;
+	cmd_buffer[1] = 0x40;
+
+	int status = send_cmd(fd, cmd_buffer, save_buffer, sizeof(cmd_buffer), save_count);
+	if (status)
+	{
+		return status;
+	}
+
+	if (!command_result(save_buffer[1]))
+	{
+		fprintf(stdout, "Values:\n");
+		unsigned int i;
+		for (i = 4; i < 64; ++i)
+		{
+			fprintf(stdout, "%i: ", i);
+			print_as_binary(save_buffer[i]);
+			fprintf(stdout, "\n");
+		}
+		return 0;
+	}
+	else
+	{
+		return -1;
+	}
+}
+
+int spi_transfer_data(int fd, char user_input[MAX_ARGUMENT_CNT][MAX_ARGUMENT_LEN], size_t user_count, char *save_buffer, size_t save_count, int index)
+{
+	char cmd_buffer[64] = "";
+	cmd_buffer[0] = 0x42;
+	cmd_buffer[1] = process_hex(user_input[index]);
+
+	unsigned int i;
+	unsigned int j;
+	for (i = 4, j = index+1; i < 64; ++i, ++j)
+	{
+		cmd_buffer[i] = process_hex(user_input[j]);
+	}
+
+	int status = send_cmd(fd, cmd_buffer, save_buffer, sizeof(cmd_buffer), save_count);
+	if (status)
+	{
+		return status;
+	}
+
+	if (!command_result(save_buffer[1]))
+	{
+
+		fprintf(stdout, "Values:\n");
+		unsigned int i;
+		for (i = 2; i < 64; ++i)
+		{
+			fprintf(stdout, "%i: ", i);
+			print_as_binary(save_buffer[i]);
+			fprintf(stdout, "\n");
+		}
+		return 0;
+	}
+	else
+	{
+		return -1;
+	}
+}
+
+int spi_cancel_transfer(int fd, char user_input[MAX_ARGUMENT_CNT][MAX_ARGUMENT_LEN], size_t user_count, char *save_buffer, size_t save_count, int index)
+{
+	char cmd_buffer[64] = "";
+	cmd_buffer[0] = 0x11;
+
+	int status = send_cmd(fd, cmd_buffer, save_buffer, sizeof(cmd_buffer), save_count);
+	if (status)
+	{
+		return status;
+	}
+
+	if (!command_result(save_buffer[1]))
+	{
+
+		fprintf(stdout, "Values:\n");
+		unsigned int i;
+		for (i = 2; i < 6; ++i)
+		{
+			fprintf(stdout, "%i: ", i);
+			print_as_binary(save_buffer[i]);
+			fprintf(stdout, "\n");
+		}
+		return 0;
+	}
+	else
+	{
+		return -1;
+	}
+}
+
+int chip_status(int fd, char user_input[MAX_ARGUMENT_CNT][MAX_ARGUMENT_LEN], size_t user_count, char *save_buffer, size_t save_count, int index)
+{
+	char cmd_buffer[64] = "";
+	cmd_buffer[0] = 0x10;
+
+	int status = send_cmd(fd, cmd_buffer, save_buffer, sizeof(cmd_buffer), save_count);
+	if (status)
+	{
+		return status;
+	}
+
+	if (!command_result(save_buffer[1]))
+	{
+		fprintf(stdout, "Values:\n");
+		unsigned int i;
+		for (i = 2; i < 6; ++i)
+		{
+			fprintf(stdout, "%i: ", i);
+			print_as_binary(save_buffer[i]);
+			fprintf(stdout, "\n");
+		}
+		return 0;
+	}
+	else
+	{
+		return -1;
+	}
 }
 
 int main(int argc, char *argv[])
@@ -105,8 +660,8 @@ int main(int argc, char *argv[])
 		char *tokenized_input = strtok(input_buffer, " ");
 
 		// Tokenizing input and putting it into an array we'll process
-		unsigned int i = 0;
-		for (i; i < MAX_ARGUMENT_CNT; ++i)
+		unsigned int i;
+		for (i = 0; i < MAX_ARGUMENT_CNT; ++i)
 		{
 			if (tokenized_input)
 			{
@@ -128,110 +683,26 @@ int main(int argc, char *argv[])
 		}
 
 		// Processing input array
-		if (strcmp(input[0], QUIT_CMD) == 0)
+		if (!strcmp(input[0], QUIT_CMD))
 		{
 			break;
 		}
-		// Getting GPIO direction
-		else if (strcmp(input[0], GET_GPIO_DIR_CMD) == 0)
+		else if (!strcmp(input[0], "nrf24l01_init"))
 		{
-			cmd_buffer[0] = 0x33;
-			if (process_cmd(fd, cmd_buffer, save_buffer, sizeof(cmd_buffer), sizeof(save_buffer)) != 0)
-			{
-				break;
-			}
-			char cmd_sucess = save_buffer[1];
-			char gpio_dir[2];
-			gpio_dir[0] = save_buffer[4];
-			gpio_dir[1] = save_buffer[5];
-
-			fprintf(stdout, "Results: ");
-			print_as_binary(gpio_dir[1]);
-			print_as_binary(gpio_dir[0]);
-			fprintf(stdout, "\n");
+			init_nrf24l01(fd);
 		}
-		else if (strcmp(input[0], SET_GPIO_DIR_CMD) == 0)
+		else if (!strcmp(input[0], "nrf24l01_read_reg"))
 		{
-			cmd_buffer[0] = 0x32;
-			cmd_buffer[5] = process_hex(input[1]);
-			cmd_buffer[4] = process_hex(input[2]);
-			if (process_cmd(fd, cmd_buffer, save_buffer, sizeof(cmd_buffer), sizeof(save_buffer)) != 0)
-			{
-				break;
-			}
-
-			char cmd_success = save_buffer[1];
-			if (cmd_success == 0)
-			{
-				fprintf(stdout, "Success!\n");
-			}
-			else
-			{
-				fprintf(stdout, "Failed!\n");
-			}
-		}
-		else if (strcmp(input[0], SET_GPIO_VAL_CMD) == 0)
-		{
-			cmd_buffer[0] = 0x30;
-			cmd_buffer[5] = process_hex(input[1]);
-			cmd_buffer[4] = process_hex(input[2]);
-			if (process_cmd(fd, cmd_buffer, save_buffer, sizeof(cmd_buffer), sizeof(save_buffer)) != 0)
-			{
-				break;
-			}
-			
-			char cmd_success = save_buffer[1];
-			if (cmd_success == 0)
-			{
-				char gpio_dir[2];
-				gpio_dir[0] = save_buffer[4];
-				gpio_dir[1] = save_buffer[5];
-				fprintf(stdout, "Values: ");
-				print_as_binary(gpio_dir[1]);
-				print_as_binary(gpio_dir[0]);
-				fprintf(stdout, "\n");
-			}
-			else
-			{
-				fprintf(stdout, "Command failed!\n");
-			}
+			read_register(fd, input[1]);
 		}
 		else
 		{
-			printf("Invalid command! Type \"help\" for a list of commands\n");
+			process_user_input(fd, input, categories, 0);
 		}
-
-		/*
-		while(tokenized_input)
-		{
-			if (strcmp(tokenized_input, "w") == 0)
-			{
-				printf("Attempting write..\n");
-				int bytes_written;
-
-				if (bytes_written != strlen("asd"))
-				{
-					printf("Could not write all bytes: %i\n", errno);
-				}
-				printf("Write complete\n");
-			}
-			tokenized_input = strtok(NULL, " ");
-		}*/
 
 		printf("\n");
 	}
-/*
-	printf("Attempting to read..\n");
-	int bytes_read = read(fd, &my_buffer, 64);
-	
-	if (bytes_read == -1)
-	{
-		printf("Could not read all bytes: %i\n", errno);
-		return -1;
-	}
 
-	printf("Buffer: %s\n", my_buffer);
-*/
 	printf("Exiting test program..\n");
 
 	return 0;
